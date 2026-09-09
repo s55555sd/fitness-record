@@ -467,7 +467,7 @@ table.kv td:last-child{text-align:right;font-variant-numeric:tabular-nums}
     <div class="note" style="margin-top:0" data-page-node-id="LPtABPBIXrcXY7SCEOGBHG">
       系数取自「谭成义减脂计算表 V3.1」附表（脂肪已按谭师 8/25 视频下调 0.2）。<br data-page-node-id="Uz6ZhE2D4LaWzAorZkOQ8n">
       训练建议参考谭成义公开教学内容（三分化、热身两段式、组歇服从供能、疲劳管理优先）。<br data-page-node-id="uu1PauLW755iz0UmourONI">
-      联网搜索数据源：Open Food Facts 公开食品数据库（每 100g 数值，仅供参考，以包装营养标签为准）。<br>
+      食物数据：内置52项来自《中国食物成分表 第6版》，加上你的自定义食物；查询完全离线，不依赖网络。
       本页为个人学习整理，不构成医疗、营养、诊疗建议。
     </div>
   </div>
@@ -915,15 +915,13 @@ function pickPanel(r,list,idx){
     UI.collapse=false;UI.netQ=null;buildMeals(r)};
   sr.appendChild(kw);sr.appendChild(close);box.appendChild(sr);
 
-  /* 操作：联网搜 / 自定义 */
+  /* 操作：自定义 */
   var acts=document.createElement("div");acts.className="acts";
-  var bNet=document.createElement("button");bNet.className="pri";bNet.textContent="联网搜索";
-  bNet.onclick=function(){net((UI.q||"").trim(),1)};
   var bMy=document.createElement("button");bMy.textContent="+ 自定义";
   bMy.className=UI.cf?"pri":"";
   bMy.onclick=function(){UI.cf=!UI.cf;UI.cfName=UI.cfName||(UI.q||"").trim();
     UI.online=null;refresh()};
-  acts.appendChild(bNet);acts.appendChild(bMy);box.appendChild(acts);
+  acts.appendChild(bMy);box.appendChild(acts);
 
   /* 本地食物网格（含自定义） */
   var grid=document.createElement("div");grid.className="grid5";
@@ -932,16 +930,17 @@ function pickPanel(r,list,idx){
   function fill(){
     var q=(UI.q||"").trim(),mine=S.custom||[];
     grid.innerHTML="";hint.innerHTML="";
-    var hit=foodList().filter(function(f){return !q||f[0].indexOf(q)>-1});
-    /* 本地库无匹配 → 收起本地列表，自动联网 */
+    var hit=foodList().filter(function(f){return matchFood(f,q)});
+    /* 本地库无匹配 → 提示用自定义，UI.cf 自动激活以便直接录入 */
     if(q&&!hit.length){
-      UI.collapse=true;grid.className="grid5 hidden";
-      hint.innerHTML='本地食物库没有「<b>'+q+'</b>」，已联网搜索；搜不到就直接存为自定义食物。';
-      net(q,0);
-      return;
+      UI.collapse=false;grid.className="grid5";
+      UI.cf=true;UI.cfName=UI.cfName||q;UI.msg="本地食物库没有「"+q+"」，已在下方录入营养值即可保存为自定义食物";
+      var nd=document.createElement("div");nd.className="none";
+      nd.textContent="无匹配，输入下方名称与营养值即可保存为自定义食物";
+      grid.appendChild(nd);return;
     }
     UI.collapse=false;grid.className="grid5";
-    if(!hit.length){var nd=document.createElement("div");nd.className="none";
+    if(!q&&!hit.length){var nd=document.createElement("div");nd.className="none";
       nd.textContent="输入关键字开始检索";grid.appendChild(nd);return}
     hit.forEach(function(f){
       var b=document.createElement("button");
@@ -952,44 +951,7 @@ function pickPanel(r,list,idx){
       b.onclick=function(){pick(f[0])};
       grid.appendChild(b)});
   }
-  /* 联网检索（force=1 立即；否则防抖 600ms 且同一关键词只搜一次） */
-  function net(q,force){
-    if(!q){UI.msg="先输入食物名再联网搜索";refresh();return}
-    if(!force&&UI.netQ===q)return;
-    UI.netQ=q;UI.online=null;UI.busy=1;UI.msg="正在联网搜索…";refresh();
-    var run=function(){
-      searchOnline(q,function(res,err){
-        UI.busy=0;
-        if(err){UI.online=null;UI.msg="联网失败："+err+"（可直接存为自定义食物）"}
-        else{UI.online=res;
-          UI.msg=res.length?"数据来源：Open Food Facts（每 100g 值），点「加入」存入自定义":
-                            "没搜到，可把「"+q+"」存为自定义食物"}
-        refresh();
-      });
-    };
-    if(force)run();
-    else{clearTimeout(UI.netT);UI.netT=setTimeout(run,600)}
-  }
   fill();
-
-  /* 联网结果 */
-  if(UI.online&&UI.online.length){
-    var ol=document.createElement("div");ol.className="olist";
-    UI.online.forEach(function(o){
-      var row=document.createElement("div");row.className="orow";
-      var n=document.createElement("div");n.className="n";
-      n.innerHTML=o.n+"<small>"+(o.b||"")+"　每100g "+r1(o.c)+"/"+r1(o.p)+"/"+r1(o.f)+"</small>";
-      var v=document.createElement("div");v.className="v";
-      v.innerHTML='<span style="color:var(--carb)">'+r1(o.c)+'</span>/'+
-        '<span style="color:var(--prot)">'+r1(o.p)+'</span>/'+
-        '<span style="color:var(--fat)">'+r1(o.f)+'</span>';
-      var add=document.createElement("button");add.textContent="加入";
-      add.onclick=function(){
-        S.custom.push([o.n,100,o.c,o.p,o.f]);rebuildFoods();save();pick(o.n)};
-      row.appendChild(n);row.appendChild(v);row.appendChild(add);ol.appendChild(row);
-    });
-    box.appendChild(ol);
-  }
 
   /* 自定义食物表单 */
   if(UI.cf){
@@ -1053,86 +1015,70 @@ function pickPanel(r,list,idx){
   if(UI.msg){var m=document.createElement("div");m.className="msg";m.textContent=UI.msg;box.appendChild(m)}
   return box;
 }
-/* 联网搜索：Open Food Facts（免费、无需密钥、响应头 Access-Control-Allow-Origin:*）
-   中文词命中率低 → 内置常用中译英对照，命中 0 时自动用英文再试；
-   官方接口偶发 503 → world 实例失败自动换 cn 实例。 */
-var CN2EN={"米饭":"rice","白米饭":"rice","大米":"rice","糙米":"brown rice","面条":"noodles",
-"馒头":"steamed bun","面包":"bread","全麦面包":"whole wheat bread","燕麦":"oats",
-"玉米":"corn","红薯":"sweet potato","土豆":"potato","芋头":"taro","南瓜":"pumpkin",
-"鸡蛋":"egg","蛋白":"egg white","牛肉":"beef","猪肉":"pork","羊肉":"lamb",
-"鸡胸肉":"chicken breast","鸡腿":"chicken","鸭肉":"duck","火腿":"ham","香肠":"sausage",
-"培根":"bacon","三文鱼":"salmon","金枪鱼":"tuna","虾":"shrimp","鱼":"fish",
-"牛奶":"milk","酸奶":"yogurt","奶酪":"cheese","奶油":"cream","黄油":"butter",
-"豆腐":"tofu","豆浆":"soy milk","黄豆":"soybean",
-"苹果":"apple","香蕉":"banana","橙子":"orange","葡萄":"grapes","西瓜":"watermelon",
-"草莓":"strawberry","蓝莓":"blueberry","梨":"pear","桃":"peach",
-"西红柿":"tomato","黄瓜":"cucumber","胡萝卜":"carrot","西兰花":"broccoli",
-"菠菜":"spinach","白菜":"cabbage","蘑菇":"mushroom",
-"花生":"peanut","核桃":"walnut","杏仁":"almond","腰果":"cashew","芝麻":"sesame",
-"巧克力":"chocolate","饼干":"biscuit","蛋糕":"cake","冰淇淋":"ice cream",
-"可乐":"cola","啤酒":"beer","咖啡":"coffee","茶":"tea","果汁":"juice",
-"糖":"sugar","蜂蜜":"honey","橄榄油":"olive oil","花生油":"peanut oil",
-"意大利面":"pasta","披萨":"pizza","汉堡":"hamburger","粥":"congee"};
-function cnEn(q){
-  if(!/[\u4e00-\u9fa5]/.test(q))return "";
-  if(CN2EN[q])return CN2EN[q];
-  var keys=Object.keys(CN2EN);
-  for(var i=0;i<keys.length;i++)if(q.indexOf(keys[i])>-1)return CN2EN[keys[i]];
-  return "";
-}
-function searchOnline(q,cb){
-  if(typeof fetch!=="function"){cb(null,"当前环境不支持联网，请用「+ 自定义」手动录入");return}
-  var terms=[q],en=cnEn(q);if(en&&en!==q)terms.push(en);
-  var hosts=["world","cn"],jobs=[];
-  terms.forEach(function(t){hosts.forEach(function(h){jobs.push([h,t])})});
-  var out=[],err="",k=0,stop=0;
-  function same(n){for(var i=0;i<out.length;i++)if(out[i].n===n)return true;return false}
-  function run(){
-    if(stop)return;
-    if(k>=jobs.length){
-      cb(out,out.length?null:(err||"没搜到，可用「+ 自定义」手动录入"));
-      return;
-    }
-    var job=jobs[k++];
-    fetchOne(job[0],job[1],function(res,e){
-      if(stop)return;
-      if(e){err=e;run();return}
-      (res||[]).forEach(function(x){if(!same(x.n))out.push(x)});
-      if(out.length>=6){stop=1;cb(out.slice(0,10),null);return}
-      run();
-    });
+/* 本地食物搜索：名称 + 别名（含中英文常见叫法），无需联网 */
+var FOOD_ALIAS={
+"燕麦（干）":["燕麦","麦片","oats","oatmeal"],
+"大米（生）":["大米","稻米","rice","米"],
+"全蛋":["鸡蛋","全蛋","egg"],
+"去皮去骨鸡腿（生）":["鸡腿","琵琶腿","chicken leg"],
+"鸡胸肉（生）":["鸡胸","鸡胸脯","chicken breast"],
+"牛肉（生）":["牛肉","牛","beef"],
+"虾仁（生）":["虾","虾仁","shrimp","prawn"],
+"龙利鱼（生）":["龙利鱼","鱼片","sole"],
+"巴沙鱼（生）":["巴沙鱼","巴沙","basa"],
+"红薯（生）":["红薯","甘薯","地瓜","山芋","番薯","sweet potato"],
+"紫薯（生）":["紫薯","purple sweet potato"],
+"土豆（生）":["土豆","马铃薯","洋芋","potato"],
+"贝贝南瓜（生）":["南瓜","贝贝南瓜","板栗南瓜","pumpkin"],
+"坚果":["坚果","mixed nuts","混合坚果"],
+"橄榄油":["橄榄油","olive oil"],
+"牛油果油":["牛油果油","avocado oil"],
+"山茶油":["山茶油","茶油","camellia oil"],
+"低芥酸菜籽油":["菜籽油","canola","菜油"],
+"猪油":["猪油","lard"],
+"牛油":["牛油","牛脂","tallow"],
+"蔬菜":["蔬菜","青菜","vegetable"],
+"西兰花":["西兰花","西蓝花","青花菜","broccoli"],
+"羽衣甘蓝":["羽衣甘蓝","芥蓝","kale"],
+"苋菜":["苋菜","amaranth"],
+"菠菜":["菠菜","spinach"],
+"菇类":["菇","菌","蘑菇","mushroom"],
+"萝卜":["萝卜","白萝卜","radish"],
+"彩椒":["彩椒","甜椒","青椒","bell pepper","capsicum"],
+"南瓜籽":["南瓜籽","南瓜子","瓜子","pumpkin seed"],
+"玉米浆包":["玉米","玉米棒","玉米浆","corn"],
+"糙米饭团":["糙米饭","饭团","brown rice ball"],
+"牛腱子":["牛腱","腱子肉","beef shank"],
+"蓝莓":["蓝莓","blueberry"],
+"西红柿":["西红柿","番茄","圣女果","tomato"],
+"熟米饭":["米饭","白米饭","蒸饭","steamed rice"],
+"馒头（熟）":["馒头","馍","steamed bun"],
+"糙米（生）":["糙米","brown rice"],
+"芋头（生）":["芋头","芋艿","毛芋","taro"],
+"藜麦（生）":["藜麦","quinoa"],
+"猪里脊（生）":["猪里脊","里脊","pork loin"],
+"鳕鱼（生）":["鳕鱼","cod"],
+"鸡蛋蛋白":["蛋白","蛋清","egg white"],
+"豆腐":["豆腐","tofu"],
+"芦笋":["芦笋","asparagus"],
+"金针菇":["金针菇","enoki"],
+"苹果":["苹果","apple"],
+"牛油果":["牛油果","鳄梨","酪梨","avocado"],
+"巴旦木":["巴旦木","扁桃仁","大杏仁","almond"],
+"香蕉（去皮）":["香蕉","甘蕉","banana"],
+"纯牛奶（全脂）":["牛奶","纯牛奶","全脂奶","milk"],
+"牛腩（熟）":["牛腩","brisket"],
+"去皮鸭腿（熟）":["鸭腿","鸭","duck"]};
+function matchFood(f,q){
+  if(!q)return true;
+  if(f[0].indexOf(q)>-1)return true;
+  var al=FOOD_ALIAS[f[0]];
+  if(!al)return false;
+  for(var i=0;i<al.length;i++){
+    if(al[i].indexOf(q)>-1)return true;
+    if(al[i].length>=2 && q.indexOf(al[i])>-1)return true;
   }
-  run();
-}
-function fetchOne(host,term,cb){
-  var url="https://"+host+".openfoodfacts.org/cgi/search.pl?search_terms="+
-    encodeURIComponent(term)+"&search_simple=1&action=process&json=1&page_size=12"+
-    "&fields=product_name,nutriments,brands";
-  var done=0;
-  var timer=setTimeout(function(){if(!done){done=1;cb(null,"请求超时")}},10000);
-  fetch(url).then(function(r){
-    if(!r.ok)throw new Error("数据源返回 "+r.status);
-    return r.json();
-  }).then(function(j){
-    if(done)return;done=1;clearTimeout(timer);
-    var arr=(j&&j.products)||[],out=[];
-    arr.forEach(function(x){
-      var n=(x.product_name||"").trim();if(!n)return;
-      var nu=x.nutriments||{};
-      var c=num(nu.carbohydrates_100g),p=num(nu.proteins_100g),f=num(nu.fat_100g);
-      if(c===null&&p===null&&f===null)return;
-      out.push({n:n,b:x.brands||"",c:c||0,p:p||0,f:f||0});
-    });
-    if(/[\u4e00-\u9fa5]/.test(term))
-      out.sort(function(a,b){return cn(b.n)-cn(a.n)});
-    cb(out.slice(0,8),null);
-  }).catch(function(e){
-    if(done)return;done=1;clearTimeout(timer);
-    cb(null,(e&&e.message)||"网络错误");
-  });
-  function cn(s){return /[\u4e00-\u9fa5]/.test(s)?1:0}
-  function num(v){if(v===undefined||v===null||v==="")return null;
-    var n=parseFloat(v);return isNaN(n)?null:n}
+  return false;
 }
 function updSums(r){
   var groups=[["b",r.meals.b],["l",r.meals.l],["d",r.meals.d]];
