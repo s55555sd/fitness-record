@@ -422,11 +422,12 @@ table.kv td:last-child{text-align:right;font-variant-numeric:tabular-nums}
     <div class="note" id="ioHint" data-page-node-id="25A714aWhBiWifdwBolNFv"></div>
   </div>
   <div class="card">
-    <h2>云端同步 <span class="hint">坚果云 WebDAV</span></h2>
+    <h2>云端同步 <span class="hint">GitHub 私有仓库</span></h2>
     <div id="syncView" class="hidden">
       <table class="kv">
-        <tr><td>账号</td><td id="syncWho">—</td></tr>
-        <tr><td>备份位置</td><td id="syncDir">—</td></tr>
+        <tr><td>仓库</td><td id="syncWho">—</td></tr>
+        <tr><td>备份文件</td><td id="syncDir">—</td></tr>
+        <tr><td>云端时间</td><td id="syncTs">—</td></tr>
       </table>
       <div class="foot" style="margin-top:10px">
         <button id="btnSyncPush">立即推送</button>
@@ -437,21 +438,19 @@ table.kv td:last-child{text-align:right;font-variant-numeric:tabular-nums}
       <div class="err" id="syncStatus" style="margin-top:8px"></div>
     </div>
     <div id="syncForm" class="hidden">
-      <div class="row"><label>WebDAV 地址</label>
-        <input type="text" id="wdUrl" placeholder="https://dav.jianguoyun.com/dav"></div>
-      <div class="row"><label>坚果云账号</label>
-        <input type="text" id="wdUser" placeholder="你的坚果云登录账号"></div>
-      <div class="row"><label>应用密码</label>
-        <input type="password" id="wdPass" placeholder="在坚果云账户-安全选项生成"></div>
-      <div class="row"><label>同步目录</label>
-        <input type="text" id="wdDir" value="减脂增肌" placeholder="云端存放的子目录名"></div>
+      <div class="row"><label>Token</label>
+        <input type="password" id="wdToken" placeholder="ghp_xxxx（需 repo 权限）"></div>
+      <div class="row"><label>仓库</label>
+        <input type="text" id="wdRepo" placeholder="用户名/仓库名"></div>
+      <div class="row"><label>文件名</label>
+        <input type="text" id="wdFile" value="sync.json" placeholder="仓库内的备份文件名"></div>
       <div class="err" id="syncStatus"></div>
       <div class="foot" style="margin-top:10px">
         <button id="btnSyncTest">测试连接</button>
         <button id="btnSyncCancel">取消</button>
         <button id="btnSyncSave" class="pri">保存配置</button>
       </div>
-      <div class="note">凭据仅存本机浏览器 localStorage（base64 弱保护），不发送到第三方。建议在坚果云「账户信息-安全选项-应用密码」生成专用密码。同步策略为 last-write-wins，操作前请确认。</div>
+      <div class="note">Token 仅存本机浏览器 localStorage（base64 弱保护），只与 GitHub 通信。仓库请设为 <b>private</b>，数据不会公开。同步策略 last-write-wins，操作前会二次确认。</div>
     </div>
   </div>
   <div class="card">
@@ -1623,52 +1622,70 @@ function renderMe(){
   renderSync();
 }
 
-/* ================= 云端同步：坚果云 WebDAV ================= */
-/* 配置：{url, user, pass, dir}；pass 仅存本机 localStorage（base64）。 */
-var WDK="tcy-wd";
+/* ================= 云端同步：GitHub 私有仓库 Contents API ================= */
+/* 配置 {token, repo, file}；token 仅存本机 localStorage（base64）。
+   选 GitHub 而非 WebDAV 的原因：api.github.com 返回 Access-Control-Allow-Origin:*，
+   浏览器可直连；坚果云 WebDAV 不返回任何 CORS 头，浏览器 fetch 会被同源策略拦截。 */
+var WDK="tcy-gh";
+var GH_API="https://api.github.com";
 function wdEnc(s){try{return btoa(unescape(encodeURIComponent(s)))}catch(e){return btoa(s)}}
 function wdDec(s){try{return decodeURIComponent(escape(atob(s)))}catch(e){try{return atob(s)}catch(_){return ""}}}
-function wdLoad(){try{var o=JSON.parse(localStorage.getItem(WDK)||"null");
-  if(o&&o.url&&o.user){o.pass=wdDec(o.pass||"");return o}}catch(e){}return null}
-function wdSave(o){o.pass=wdEnc(o.pass||"");localStorage.setItem(WDK,JSON.stringify(o))}
-function wdClear(){localStorage.removeItem(WDK)}
-function wdAuth(cfg){return "Basic "+btoa((cfg.user||"")+":"+(cfg.pass||""))}
-async function wdReq(cfg,method,p,body){
-  var h={"Authorization":wdAuth(cfg)};
-  if(method==="PUT")h["Content-Type"]="application/json;charset=utf-8";
-  if(method==="PROPFIND")h["Depth"]="0";
-  return await fetch(cfg.url+p,{method:method,headers:h,body:body||undefined});
+function wdLoad(){
+  try{var o=JSON.parse(localStorage.getItem(WDK)||"null");
+    if(o&&o.token&&o.repo){o.token=wdDec(o.token||"");return o}}catch(e){}
+  return null;
 }
-async function wdEnsure(cfg){
-  var r=await wdReq(cfg,"PROPFIND","/");
-  if(!r.ok&&r.status!==207&&r.status!==301&&r.status!==302)
-    return {ok:false,err:"无法连接 WebDAV（HTTP "+r.status+"）"};
-  var p="/"+cfg.dir;
-  var r2=await wdReq(cfg,"PROPFIND",p);
-  if(r2.status===404){
-    var mk=await wdReq(cfg,"MKCOL",p);
-    if(mk.status!==201&&mk.status!==405)return {ok:false,err:"创建目录失败（HTTP "+mk.status+"）"};
-  }else if(!r2.ok&&r2.status!==207)
-    return {ok:false,err:"目录访问失败（HTTP "+r2.status+"）"};
+function wdSave(o){o.token=wdEnc(o.token||"");localStorage.setItem(WDK,JSON.stringify(o))}
+function wdClear(){localStorage.removeItem(WDK)}
+/* 统一请求；任何异常都转成 {ok:false,err} ，避免按钮点了没反应 */
+async function ghReq(method,path,body){
+  var cfg=wdLoad();if(!cfg)throw new Error("尚未配置");
+  var opt={method:method,headers:{Authorization:"Bearer "+cfg.token,
+    Accept:"application/vnd.github+json"}};
+  if(body){opt.headers["Content-Type"]="application/json";
+    opt.body=JSON.stringify(body)}
+  var r;
+  try{
+    r=await fetch(GH_API+path,opt);
+  }catch(e){
+    throw new Error("网络请求失败（可能是跨域被拦截或断网）："+e.message);
+  }
+  var j=null;
+  try{j=await r.json()}catch(e){j=null}
+  if(r.status===401)throw new Error("Token 无效或已过期（HTTP 401）");
+  if(r.status===403)throw new Error("被拒绝（HTTP 403，可能是速率限制或权限不足）");
+  if(r.status===404)throw new Error("仓库或文件不存在（HTTP 404）");
+  if(!r.ok)throw new Error("请求失败（HTTP "+r.status+"）");
+  return j;
+}
+/* 测试：读仓库元信息 */
+async function ghTest(){
+  var cfg=wdLoad();if(!cfg)throw new Error("尚未配置");
+  await ghReq("GET","/repos/"+cfg.repo);
   return {ok:true};
 }
-async function wdPush(){
-  var cfg=wdLoad();if(!cfg)return{ok:false,err:"尚未配置"};
-  var e=await wdEnsure(cfg);if(!e.ok)return e;
-  var body=JSON.stringify({ts:Date.now(),v:2,data:S});
-  var r=await wdReq(cfg,"PUT","/"+cfg.dir+"/sync.json",body);
-  if(!r.ok)return{ok:false,err:"上传失败（HTTP "+r.status+"）"};
-  return{ok:true,ts:Date.now()};
+/* 读取云端：返回 {ts, data, sha} */
+async function ghRead(){
+  var cfg=wdLoad();if(!cfg)throw new Error("尚未配置");
+  var j=await ghReq("GET","/repos/"+cfg.repo+"/contents/"+cfg.file);
+  if(!j||!j.content)throw new Error("云端文件为空");
+  var txt=wdDec(String(j.content).replace(/\s/g,""));
+  var obj;
+  try{obj=JSON.parse(txt)}catch(e){throw new Error("云端文件解析失败")}
+  if(!obj||!obj.data||!obj.data.profile)throw new Error("云端备份格式不正确");
+  return {ts:obj.ts||0,data:obj.data,sha:j.sha};
 }
-async function wdPull(){
-  var cfg=wdLoad();if(!cfg)return{ok:false,err:"尚未配置"};
-  var e=await wdEnsure(cfg);if(!e.ok)return e;
-  var r=await wdReq(cfg,"GET","/"+cfg.dir+"/sync.json");
-  if(r.status===404)return{ok:false,err:"云端无备份"};
-  if(!r.ok)return{ok:false,err:"下载失败（HTTP "+r.status+"）"};
-  var j;try{j=JSON.parse(await r.text())}catch(e){return{ok:false,err:"云端文件解析失败"}};
-  if(!j||!j.data||!j.data.profile)return{ok:false,err:"云端备份格式不正确"};
-  return{ok:true,data:j.data,ts:j.ts||0};
+/* 写入云端 */
+async function ghWrite(payload){
+  var cfg=wdLoad();if(!cfg)throw new Error("尚未配置");
+  var sha=null;
+  try{var cur=await ghReq("GET","/repos/"+cfg.repo+"/contents/"+cfg.file);
+    if(cur&&cur.sha)sha=cur.sha}catch(e){sha=null}
+  var body={message:"sync "+new Date().toLocaleString(),
+    content:wdEnc(JSON.stringify(payload))};
+  if(sha)body.sha=sha;
+  await ghReq("PUT","/repos/"+cfg.repo+"/contents/"+cfg.file,body);
+  return {ok:true};
 }
 function wdApply(remote){
   S=remote;S.records=S.records||{};S.custom=S.custom||[];
@@ -1678,60 +1695,73 @@ function wdApply(remote){
 function renderSync(){
   var cfg=wdLoad();
   var v=document.getElementById("syncView"),
-      f=document.getElementById("syncForm"),
-      st=document.getElementById("syncStatus");
-  v.className=cfg?"hidden":"";
-  f.className=cfg?"":"hidden";
+      f=document.getElementById("syncForm");
+  if(!v||!f)return;
+  /* 已配置 → 显示只读视图(syncView)、隐藏表单(syncForm)；未配置则相反 */
+  v.className=cfg?"":"hidden";
+  f.className=cfg?"hidden":"";
   if(cfg){
-    document.getElementById("syncWho").textContent=cfg.user+" @ "+cfg.url;
-    document.getElementById("syncDir").textContent="/"+cfg.dir+"/sync.json";
-    st.textContent="";
+    document.getElementById("syncWho").textContent=cfg.repo;
+    document.getElementById("syncDir").textContent="/"+cfg.file;
+    document.getElementById("syncStatus").textContent="";
   }
 }
-async function syncTest(){
-  var g=function(id){return document.getElementById(id)};
-  var cfg={url:g("wdUrl").value.trim(),user:g("wdUser").value.trim(),
-           pass:g("wdPass").value,dir:g("wdDir").value.trim().replace(/^\/+|\/+$/g,"")||"减脂增肌"};
-  var st=g("syncStatus");st.textContent="测试中…";
-  if(!cfg.url||!cfg.user||!cfg.pass){st.textContent="请填写完整";return}
-  wdSave(cfg);cfg.pass=wdDec(cfg.pass);
-  var e=await wdEnsure(cfg);
-  st.textContent=e.ok?"✓ 连接成功，目录已就绪":"✗ "+e.err;
+/* 所有操作统一包 try/catch，保证任何失败都有文字反馈 */
+function withStatus(fn){
+  return async function(){
+    var st=document.getElementById("syncStatus");
+    var btn=this;if(btn&&btn.disabled!==undefined)btn.disabled=true;
+    st.style.color="";st.textContent="处理中…";
+    try{await fn.call(this,st)}
+    catch(e){st.textContent="✗ "+(e&&e.message||"未知错误")}
+    finally{if(btn&&btn.disabled!==undefined)btn.disabled=false}
+  };
 }
-async function syncPush(){
-  var st=document.getElementById("syncStatus");
-  if(!wdLoad()){st.textContent="请先填写并测试";return}
-  if(!confirm("将用本机数据覆盖云端备份（last-write-wins），继续？"))return;
-  st.textContent="上传中…";
-  var r=await wdPush();
-  st.textContent=r.ok?"✓ 已上传 "+new Date(r.ts).toLocaleString():"✗ "+r.err;
-}
-async function syncPull(){
-  var st=document.getElementById("syncStatus");
-  if(!wdLoad()){st.textContent="请先填写并测试";return}
-  var r=await wdPull();
-  if(!r.ok){st.textContent="✗ "+r.err;return}
-  if(!confirm("将用云端备份覆盖本机全部数据（不可恢复），继续？"))return;
+var syncTest=withStatus(async function(st){
+  await ghTest();
+  st.style.color="var(--ok)";st.textContent="✓ 连接成功，仓库可访问";
+});
+var syncPush=withStatus(async function(st){
+  if(!wdLoad())throw new Error("请先填写并保存配置");
+  if(!confirm("将用本机数据覆盖云端备份（last-write-wins），继续？")){
+    st.textContent="已取消";return}
+  await ghWrite({ts:Date.now(),v:2,data:S});
+  st.style.color="var(--ok)";
+  st.textContent="✓ 已上传 "+new Date().toLocaleString();
+});
+var syncPull=withStatus(async function(st){
+  if(!wdLoad())throw new Error("请先填写并保存配置");
+  var r=await ghRead();
+  if(!confirm("将用云端备份覆盖本机全部数据（不可恢复），继续？")){
+    st.textContent="已取消";return}
   wdApply(r.data);
-  st.textContent="✓ 已从云端拉取（备份时间："+new Date(r.ts).toLocaleString()+"）";
-}
+  document.getElementById("syncTs").textContent=
+    r.ts?new Date(r.ts).toLocaleString():"—";
+  st.style.color="var(--ok)";
+  st.textContent="✓ 已从云端拉取（备份时间："+
+    (r.ts?new Date(r.ts).toLocaleString():"未知")+"）";
+});
 function syncConfig(){
   var g=function(id){return document.getElementById(id)};
-  var cfg=wdLoad()||{url:"https://dav.jianguoyun.com/dav",user:"",pass:"",dir:"减脂增肌"};
-  g("wdUrl").value=cfg.url;g("wdUser").value=cfg.user||"";
-  g("wdPass").value="";g("wdDir").value=cfg.dir||"减脂增肌";
-  document.getElementById("syncStatus").textContent="";
+  var cfg=wdLoad()||{token:"",repo:"s55555sd/fitness-sync-data",file:"sync.json"};
+  g("wdToken").value=cfg.token||"";
+  g("wdRepo").value=cfg.repo||"s55555sd/fitness-sync-data";
+  g("wdFile").value=cfg.file||"sync.json";
+  g("syncStatus").textContent="";
 }
-function syncEdit(){document.getElementById("syncView").className="hidden";
-  document.getElementById("syncForm").className="";syncConfig()}
+function syncEdit(){
+  document.getElementById("syncView").className="hidden";
+  document.getElementById("syncForm").className="";syncConfig();
+}
 function syncCancel(){renderSync()}
 function syncSaveCfg(){
   var g=function(id){return document.getElementById(id)};
-  var cfg={url:g("wdUrl").value.trim(),user:g("wdUser").value.trim(),
-           pass:g("wdPass").value,dir:g("wdDir").value.trim().replace(/^\/+|\/+$/g,"")||"减脂增肌"};
   var st=g("syncStatus");
-  if(!cfg.url||!cfg.user){st.textContent="请填写地址和账号";return}
-  if(!cfg.pass)cfg.pass=wdLoad()&&wdDec(wdLoad().pass||"")||"";
+  var cfg={token:g("wdToken").value.trim(),
+           repo:g("wdRepo").value.trim(),
+           file:g("wdFile").value.trim()||"sync.json"};
+  if(!cfg.token){st.textContent="请填写 Token";return}
+  if(!cfg.repo||cfg.repo.indexOf("/")<0){st.textContent="仓库格式应为 用户名/仓库名";return}
   wdSave(cfg);renderSync();
 }
 function syncClear(){
@@ -1741,22 +1771,23 @@ function syncClear(){
 
 
 /* ================= 一次性自动配置（hash #wdc=base64） ================= */
-/* 链接形态：…/index.html#wdc=<urlencode(base64({"u":..,"p":..,"d":..}))>
-   打开时写入 localStorage 并清除 hash。链接本身含明文密码，勿收藏/分享。 */
-(function wdAuto(){
+/* 链接形态：…/index.html#wdc=<urlencode(base64({"t":token,"r":"用户/仓库","f":"sync.json"}))>
+   打开时写入 localStorage 并清除 hash。链接本身含明文 token，勿收藏/分享。 */
+(function ghAuto(){
   try{
     var h=location.hash||"";
     var i=h.indexOf("wdc=");if(i<0)return;
     var enc=decodeURIComponent(h.substring(i+4).split("&")[0]);
     var o=JSON.parse(atob(enc));
-    if(!o||!o.u)return;
-    var cfg={url:o.url||"https://dav.jianguoyun.com/dav",user:String(o.u),
-             pass:String(o.p||""),dir:String(o.d||"减脂增肌")};
-    if(!cfg.user||!cfg.pass)return;
+    if(!o||!o.t)return;
+    var cfg={token:String(o.t),repo:String(o.r||"s55555sd/fitness-sync-data"),
+             file:String(o.f||"sync.json")};
+    if(!cfg.token)return;
     wdSave(cfg);
     history.replaceState(null,"",location.pathname+location.search);
     setTimeout(function(){
-      alert("已自动写入同步配置。\n\n账号："+cfg.user+"\n同步目录：/"+cfg.dir+"/sync.json\n\n⚠ 该链接含明文密码，请勿收藏或分享。\n建议：稍后去「坚果云-账户信息-安全选项」删除该应用密码以防泄露。");
+      alert("已自动写入同步配置。\n\n仓库："+cfg.repo+"\n文件：/"+cfg.file+
+        "\n\n⚠ 该链接含明文 Token，请勿收藏或分享。\n建议：稍后到 GitHub Settings → Developer settings → Personal access tokens 删除此 token 并重新生成一个。");
     },200);
   }catch(e){}
 })();
