@@ -454,6 +454,33 @@ table.kv td:last-child{text-align:right;font-variant-numeric:tabular-nums}
     </div>
   </div>
   <div class="card">
+    <h2>联网搜食物 <span class="hint">nutridata.cn</span></h2>
+    <div id="ndView" class="hidden">
+      <table class="kv">
+        <tr><td>状态</td><td id="ndWho">—</td></tr>
+      </table>
+      <div class="foot" style="margin-top:10px">
+        <button id="btnNdEdit">修改凭据</button>
+        <button id="btnNdClear">清除凭据</button>
+      </div>
+      <div class="err" id="ndStatus" style="margin-top:8px"></div>
+    </div>
+    <div id="ndForm" class="hidden">
+      <div class="note" style="margin-top:0">
+        在浏览器登录 <a href="https://nutridata.cn/" target="_blank">nutridata.cn</a>（邮箱/微信/SMS），按 <b>F12</b> → Network 标签 → 刷新页面 → 点任意 <code>/api/</code> 请求 → 在 Request Headers 中找 <b>Cookie</b> 行 → 复制整段值粘贴到下方。<br>
+        凭据只保存在本机 localStorage（base64 弱保护），不上传。注意会话 Cookie 会过期，失效后重新登录复制即可。
+      </div>
+      <div class="row"><label>Cookie</label>
+        <textarea id="ndCookie" rows="3" placeholder="粘贴浏览器中复制的完整 Cookie 值"></textarea></div>
+      <div class="err" id="ndStatus"></div>
+      <div class="foot" style="margin-top:10px">
+        <button id="btnNdTest">测试连接</button>
+        <button id="btnNdCancel">取消</button>
+        <button id="btnNdSave" class="pri">保存凭据</button>
+      </div>
+    </div>
+  </div>
+  <div class="card">
     <h2>安装到手机</h2>
     <div id="instBtnWrap" class="hidden">
       <button class="btn" id="btnInstall" style="width:100%;margin-bottom:8px">安装到桌面（离线可用）</button>
@@ -915,13 +942,16 @@ function pickPanel(r,list,idx){
     UI.collapse=false;UI.netQ=null;buildMeals(r)};
   sr.appendChild(kw);sr.appendChild(close);box.appendChild(sr);
 
-  /* 操作：自定义 */
+  /* 操作：联网搜 / 自定义 */
   var acts=document.createElement("div");acts.className="acts";
+  var bNet=document.createElement("button");bNet.textContent="联网搜 NutriData";
+  bNet.className="pri";
+  bNet.onclick=function(){net((UI.q||"").trim(),1)};
   var bMy=document.createElement("button");bMy.textContent="+ 自定义";
   bMy.className=UI.cf?"pri":"";
   bMy.onclick=function(){UI.cf=!UI.cf;UI.cfName=UI.cfName||(UI.q||"").trim();
     UI.online=null;refresh()};
-  acts.appendChild(bMy);box.appendChild(acts);
+  acts.appendChild(bNet);acts.appendChild(bMy);box.appendChild(acts);
 
   /* 本地食物网格（含自定义） */
   var grid=document.createElement("div");grid.className="grid5";
@@ -931,12 +961,13 @@ function pickPanel(r,list,idx){
     var q=(UI.q||"").trim(),mine=S.custom||[];
     grid.innerHTML="";hint.innerHTML="";
     var hit=foodList().filter(function(f){return matchFood(f,q)});
-    /* 本地库无匹配 → 提示用自定义，UI.cf 自动激活以便直接录入 */
+    /* 本地无匹配时显示提示 + 引导 */
     if(q&&!hit.length){
       UI.collapse=false;grid.className="grid5";
-      UI.cf=true;UI.cfName=UI.cfName||q;UI.msg="本地食物库没有「"+q+"」，已在下方录入营养值即可保存为自定义食物";
+      UI.cf=true;UI.cfName=UI.cfName||q;
+      UI.msg="本地食物库没有「"+q+"」。可点上方「联网搜 NutriData」或在下方录入保存为自定义食物。";
       var nd=document.createElement("div");nd.className="none";
-      nd.textContent="无匹配，输入下方名称与营养值即可保存为自定义食物";
+      nd.textContent="无本地匹配（已为你打开下方「+ 自定义」录入区）";
       grid.appendChild(nd);return;
     }
     UI.collapse=false;grid.className="grid5";
@@ -951,7 +982,42 @@ function pickPanel(r,list,idx){
       b.onclick=function(){pick(f[0])};
       grid.appendChild(b)});
   }
+  /* 联网搜 NutriData */
+  function net(q,force){
+    if(!q){UI.msg="先输入食物名再联网搜";refresh();return}
+    if(!ndLoad().cookie){UI.msg="未配置 NutriData 凭据，请到【我的】→ 联网搜食物 → 设置";refresh();return}
+    if(!force&&UI.netQ===q)return;
+    UI.netQ=q;UI.online=null;UI.busy=1;UI.msg="正在联网搜索 NutriData…";refresh();
+    searchNutriData(q,function(res,err){
+      UI.busy=0;
+      if(err){UI.online=null;UI.msg="联网搜索失败："+err+"（也可直接保存为自定义食物）";refresh();return}
+      UI.online=res||[];
+      UI.msg=UI.online.length?"数据来源：NutriData.cn（每 100g 值），点「加入」存入自定义":
+                                "NutriData 没搜到「"+q+"」，可保存为自定义食物";
+      refresh();
+    });
+  }
   fill();
+
+  /* 联网搜结果 */
+  if(UI.online&&UI.online.length){
+    var ol=document.createElement("div");ol.className="olist";
+    UI.online.forEach(function(o){
+      var row=document.createElement("div");row.className="orow";
+      var n=document.createElement("div");n.className="n";
+      n.innerHTML=o.n+"<small>"+(o.b||"")+"　每100g "+r1(o.c)+"/"+r1(o.p)+"/"+r1(o.f)+
+        (o.k?"　"+r1(o.k)+" kcal":"")+"</small>";
+      var v=document.createElement("div");v.className="v";
+      v.innerHTML='<span style="color:var(--carb)">'+r1(o.c)+'</span>/'+
+        '<span style="color:var(--prot)">'+r1(o.p)+'</span>/'+
+        '<span style="color:var(--fat)">'+r1(o.f)+'</span>';
+      var add=document.createElement("button");add.textContent="加入";
+      add.onclick=function(){
+        S.custom.push([o.n,100,o.c,o.p,o.f]);rebuildFoods();save();pick(o.n)};
+      row.appendChild(n);row.appendChild(v);row.appendChild(add);ol.appendChild(row);
+    });
+    box.appendChild(ol);
+  }
 
   /* 自定义食物表单 */
   if(UI.cf){
@@ -1079,6 +1145,76 @@ function matchFood(f,q){
     if(al[i].length>=2 && q.indexOf(al[i])>-1)return true;
   }
   return false;
+}
+
+/* ================= 联网搜食物：NutriData（需登录 Cookie） ================= */
+/* nutridata.cn 的食物数据库（3446 条食物+22180 道菜谱）需登录后才能访问；
+   CORS 头允许携带凭证，请求时附上 Cookie 即可。 */
+var NDK="tcy-nd";
+function ndLoad(){try{var o=JSON.parse(localStorage.getItem(NDK)||"null");return o&&o.cookie?o:{}}catch(e){return{}}}
+function ndSave(c){localStorage.setItem(NDK,JSON.stringify({cookie:c||""}))}
+function ndClear(){localStorage.removeItem(NDK)}
+function ndRender(){
+  var c=ndLoad(),v=document.getElementById("ndView"),f=document.getElementById("ndForm"),
+      who=document.getElementById("ndWho"),st=document.getElementById("ndStatus");
+  if(!v||!f)return;
+  if(c.cookie){
+    v.classList.remove("hidden");f.classList.add("hidden");
+    who.textContent="已配置（"+(c.cookie||"").length+" 字节）";
+    if(st)st.textContent="";
+  }else{
+    v.classList.add("hidden");f.classList.remove("hidden");
+    var cv=document.getElementById("ndCookie");if(cv)cv.value="";
+    if(st)st.textContent="";
+  }
+}
+async function ndCall(payload){
+  var c=ndLoad();
+  if(!c.cookie)throw new Error("尚未配置 Cookie");
+  var r=await fetch("https://nutridata.cn/api/nutri-service/dblist/synthesizeSearch",{
+    method:"POST",
+    mode:"cors",
+    credentials:"omit",
+    headers:{"Content-Type":"application/json","Cookie":c.cookie,"Accept":"application/json"},
+    body:JSON.stringify(payload||{})
+  });
+  var j=null;try{j=await r.json()}catch(e){}
+  if(j&&j.code===6001)throw new Error("Cookie 无效或已过期，请重新获取");
+  if(!r.ok&&!j)throw new Error("HTTP "+r.status);
+  return j||{code:r.status};
+}
+async function ndTest(){
+  var j=await ndCall({keyword:"苹果",pageNum:1,pageSize:5});
+  return j;
+}
+async function searchNutriData(q,cb){
+  if(typeof fetch!=="function"){cb(null,"当前环境不支持联网");return}
+  if(!ndLoad().cookie){cb(null,"未配置 NutriData 凭据，请先在【我的】→ 联网搜食物 中设置");return}
+  var done=0,t=setTimeout(function(){if(!done){done=1;cb(null,"请求超时（12s）")}},12000);
+  try{
+    var j=await ndCall({keyword:q||"",pageNum:1,pageSize:12});
+    if(done)return;done=1;clearTimeout(t);
+    if(j.code&&j.code!==200){cb(null,j.msg||("接口返回 "+j.code));return}
+    var arr=(j.data&&(j.data.records||j.data.list||j.data.rows||j.data))||[];
+    if(!Array.isArray(arr))arr=[];
+    var out=[];
+    arr.forEach(function(x){
+      var n=x.foodName||x.name||x.chineseName||x.title||x.food_name;
+      if(!n)return;
+      /* 字段映射：尝试多种命名；按 100g 可食部 */
+      function v(k){return x[k]!==undefined?x[k]:(x[k.toLowerCase()]!==undefined?x[k.toLowerCase()]:null)}
+      var C=v("carbohydrateG")||v("carbohydrate")||v("carbG")||v("carb")||v("carbohydrate_100g");
+      var P=v("proteinG")||v("protein")||v("proteins")||v("protein_100g");
+      var F=v("fatG")||v("fat")||v("fat_100g");
+      var K=v("energyKcal")||v("energy")||v("calories")||v("kcal");
+      var pN=parseFloat(P)||0,fN=parseFloat(F)||0,cN=parseFloat(C)||0;
+      out.push({n:n,b:x.brand||x.dbName||"",c:cN,p:pN,f:fN,k:K,id:x.id});
+    });
+    cb(out,null);
+  }catch(e){
+    if(done)return;done=1;clearTimeout(t);
+    cb(null,(e&&e.message)||"网络错误");
+  }
 }
 function updSums(r){
   var groups=[["b",r.meals.b],["l",r.meals.l],["d",r.meals.d]];
@@ -1825,7 +1961,7 @@ function go(tab){
     navigator.serviceWorker.register("sw.js").catch(function(){});
   }
 
-  /* 云端同步：坚果云 WebDAV */
+  /* 云端同步：GitHub Contents API */
   document.getElementById("btnSyncPush").onclick=syncPush;
   document.getElementById("btnSyncPull").onclick=syncPull;
   document.getElementById("btnSyncEdit").onclick=syncEdit;
@@ -1833,6 +1969,34 @@ function go(tab){
   document.getElementById("btnSyncTest").onclick=syncTest;
   document.getElementById("btnSyncSave").onclick=syncSaveCfg;
   document.getElementById("btnSyncClear").onclick=syncClear;
+
+  /* NutriData 凭据 */
+  document.getElementById("btnNdEdit").onclick=function(){ndRender()};
+  document.getElementById("btnNdCancel").onclick=function(){ndRender()};
+  document.getElementById("btnNdClear").onclick=function(){
+    if(!confirm("清除 NutriData 凭据？"))return;
+    ndClear();ndRender();
+  };
+  document.getElementById("btnNdSave").onclick=function(){
+    var cv=document.getElementById("ndCookie"),st=document.getElementById("ndStatus");
+    var v=(cv.value||"").trim();
+    if(!v){st.textContent="请粘贴 Cookie";st.style.color="var(--warn)";return}
+    ndSave(v);st.textContent="已保存";st.style.color="var(--ok)";ndRender();
+  };
+  document.getElementById("btnNdTest").onclick=async function(){
+    var cv=document.getElementById("ndCookie"),st=document.getElementById("ndStatus");
+    var v=(cv.value||"").trim();
+    if(!v){st.textContent="请先粘贴 Cookie 再测试";st.style.color="var(--warn)";return}
+    st.textContent="测试中…";st.style.color="var(--muted)";
+    try{
+      ndSave(v);
+      var j=await ndTest();
+      st.textContent="连接成功（接口 code="+(j.code||200)+"）";st.style.color="var(--ok)";
+    }catch(e){
+      st.textContent="失败："+(e.message||e);st.style.color="var(--warn)";
+    }
+  };
+  ndRender();
 
   document.querySelectorAll("#segPeriod button").forEach(function(b){
     b.onclick=function(){UI.period=b.dataset.v;
