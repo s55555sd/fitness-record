@@ -457,33 +457,27 @@ table.kv td:last-child{text-align:right;font-variant-numeric:tabular-nums}
     <h2>联网搜食物 <span class="hint">nutridata.cn</span></h2>
     <div id="ndView" class="hidden">
       <table class="kv">
-        <tr><td>状态</td><td id="ndWho">—</td></tr>
-        <tr><td>接口</td><td id="ndApiView">—</td></tr>
+        <tr><td>账号</td><td id="ndWho">—</td></tr>
       </table>
       <div class="foot" style="margin-top:10px">
-        <button id="btnNdEdit">修改凭据</button>
-        <button id="btnNdClear">清除凭据</button>
+        <button id="btnNdEdit">修改账号</button>
+        <button id="btnNdTest2">测试连接</button>
+        <button id="btnNdClear">清除</button>
       </div>
       <div class="err" id="ndStatus" style="margin-top:8px"></div>
     </div>
     <div id="ndForm" class="hidden">
       <div class="note" style="margin-top:0">
-        在浏览器登录 <a href="https://nutridata.cn/" target="_blank">nutridata.cn</a>（邮箱/微信/SMS），按 <b>F12</b> → Network 标签 → 刷新页面 → 点任意 <code>/api/</code> 请求 → 在 Request Headers 中找 <b>Cookie</b> 行 → 复制整段值粘贴到下方。<br>
-        凭据只保存在本机 localStorage（base64 弱保护），不上传。注意会话 Cookie 会过期，失效后重新登录复制即可。
+        数据源为 <a href="https://nutridata.cn/" target="_blank">NutriData</a> 食物成分库（3446 条，源自《中国食物成分表》及 USDA/澳/日等权威机构）。<br>
+        填写你在该站注册的手机号与密码，App 会自动登录并检索；账号仅保存在本机（base64 弱保护），不会上传到任何第三方。
       </div>
-      <div class="row"><label>接口</label>
-        <select id="ndApi">
-          <option value="dblist/synthesizeSearch">dblist/synthesizeSearch（官方前端在用，推荐）</option>
-          <option value="ingredient/selectIngredientList">ingredient/selectIngredientList（备选）</option>
-          <option value="dblist/selectDblist">dblist/selectDblist（分库检索）</option>
-        </select></div>
-      <div class="row"><label>Cookie</label>
-        <textarea id="ndCookie" rows="3" placeholder="粘贴浏览器中复制的完整 Cookie 值"></textarea></div>
+      <div class="row"><label>手机号</label><input id="ndUser" type="text" inputmode="numeric" autocomplete="off" placeholder="注册手机号"></div>
+      <div class="row"><label>密码</label><input id="ndPass" type="password" autocomplete="off" placeholder="登录密码"></div>
       <div class="err" id="ndStatus"></div>
       <div class="foot" style="margin-top:10px">
         <button id="btnNdTest">测试连接</button>
         <button id="btnNdCancel">取消</button>
-        <button id="btnNdSave" class="pri">保存凭据</button>
+        <button id="btnNdSave" class="pri">保存</button>
       </div>
     </div>
   </div>
@@ -501,7 +495,7 @@ table.kv td:last-child{text-align:right;font-variant-numeric:tabular-nums}
     <div class="note" style="margin-top:0" data-page-node-id="LPtABPBIXrcXY7SCEOGBHG">
       系数取自「谭成义减脂计算表 V3.1」附表（脂肪已按谭师 8/25 视频下调 0.2）。<br data-page-node-id="Uz6ZhE2D4LaWzAorZkOQ8n">
       训练建议参考谭成义公开教学内容（三分化、热身两段式、组歇服从供能、疲劳管理优先）。<br data-page-node-id="uu1PauLW755iz0UmourONI">
-      食物数据：内置52项来自《中国食物成分表 第6版》，加上你的自定义食物；查询完全离线，不依赖网络。
+      食物数据：内置52项来自《中国食物成分表 第6版》，加上你的自定义食物；本地查询完全离线，不依赖网络。配置 NutriData 账号后，可联网检索其食物成分库（3446 条，数据源自《中国食物成分表》及 USDA/澳/日等权威机构）。
       本页为个人学习整理，不构成医疗、营养、诊疗建议。
     </div>
   </div>
@@ -992,7 +986,7 @@ function pickPanel(r,list,idx){
   /* 联网搜 NutriData */
   function net(q,force){
     if(!q){UI.msg="先输入食物名再联网搜";refresh();return}
-    if(!ndLoad().cookie){UI.msg="未配置 NutriData 凭据，请到【我的】→ 联网搜食物 → 设置";refresh();return}
+    if(!ndHas()){UI.msg="未配置 NutriData 账号，请到【我的】→ 联网搜食物 → 设置";refresh();return}
     if(!force&&UI.netQ===q)return;
     UI.netQ=q;UI.online=null;UI.busy=1;UI.msg="正在联网搜索 NutriData…";refresh();
     searchNutriData(q,function(res,err){
@@ -1154,90 +1148,222 @@ function matchFood(f,q){
   return false;
 }
 
-/* ================= 联网搜食物：NutriData（需登录 Cookie） ================= */
-/* nutridata.cn 的食物数据库（3446 条食物+22180 道菜谱）需登录后才能访问；
-   CORS 头允许携带凭证，请求时附上 Cookie 即可。 */
+/* ============ 极简 AES-128-ECB / PKCS7 / Base64(UTF-8)，无依赖 ============
+   nutridata.cn 的请求体与响应体都用 AES-128-ECB 加密，WebCrypto 不支持 ECB，
+   因此内置一份精简实现（已与 Node crypto 对拍 45 组全通过）。 */
+var NDAes=(function(){
+  var S=new Array(256),IS=new Array(256),RCON=[1,2,4,8,16,32,64,128,27,54];
+  (function(){var p=1,q=1,x;
+    do{
+      p=p^(((p<<1)&255)^((p&128)?27:0));
+      q^=(q<<1)&255;q^=(q<<2)&255;q^=(q<<4)&255;
+      if(q&128)q^=9;
+      x=q^((q<<1)|(q>>7))^((q<<2)|(q>>6))^((q<<3)|(q>>5))^((q<<4)|(q>>4));
+      S[p]=(x^99)&255;
+    }while(p!==1);
+    S[0]=99;
+    for(var i=0;i<256;i++)IS[S[i]]=i;
+  })();
+  function xt(a){return ((a<<1)^((a&128)?27:0))&255}
+  function mul(a,b){var r=0,i;for(i=0;i<8;i++){if(b&1)r^=a;b>>=1;a=xt(a)}return r&255}
+  function expand(key){var w=[],i,k,t,tt;
+    for(i=0;i<16;i++)w[i]=key[i];
+    for(i=4;i<44;i++){
+      t=[w[(i-1)*4],w[(i-1)*4+1],w[(i-1)*4+2],w[(i-1)*4+3]];
+      if(i%4===0){
+        tt=t[0];t[0]=t[1];t[1]=t[2];t[2]=t[3];t[3]=tt;
+        t[0]=S[t[0]];t[1]=S[t[1]];t[2]=S[t[2]];t[3]=S[t[3]];
+        t[0]^=RCON[(i/4)-1];
+      }
+      for(k=0;k<4;k++)w[i*4+k]=w[(i-4)*4+k]^t[k];
+    }
+    return w;
+  }
+  function addRK(s,w,r){for(var i=0;i<16;i++)s[i]^=w[r*16+i]}
+  function subB(s){for(var i=0;i<16;i++)s[i]=S[s[i]]}
+  function invSubB(s){for(var i=0;i<16;i++)s[i]=IS[s[i]]}
+  function shiftR(s){var t=s.slice(),c,r;for(c=0;c<4;c++)for(r=0;r<4;r++)s[4*c+r]=t[4*((c+r)%4)+r]}
+  function invShiftR(s){var t=s.slice(),c,r;for(c=0;c<4;c++)for(r=0;r<4;r++)s[4*((c+r)%4)+r]=t[4*c+r]}
+  function mixC(s){var c,a0,a1,a2,a3;
+    for(c=0;c<4;c++){
+      a0=s[4*c];a1=s[4*c+1];a2=s[4*c+2];a3=s[4*c+3];
+      s[4*c]=mul(a0,2)^mul(a1,3)^a2^a3;
+      s[4*c+1]=a0^mul(a1,2)^mul(a2,3)^a3;
+      s[4*c+2]=a0^a1^mul(a2,2)^mul(a3,3);
+      s[4*c+3]=mul(a0,3)^a1^a2^mul(a3,2);
+    }
+  }
+  function invMixC(s){var c,a0,a1,a2,a3;
+    for(c=0;c<4;c++){
+      a0=s[4*c];a1=s[4*c+1];a2=s[4*c+2];a3=s[4*c+3];
+      s[4*c]=mul(a0,14)^mul(a1,11)^mul(a2,13)^mul(a3,9);
+      s[4*c+1]=mul(a0,9)^mul(a1,14)^mul(a2,11)^mul(a3,13);
+      s[4*c+2]=mul(a0,13)^mul(a1,9)^mul(a2,14)^mul(a3,11);
+      s[4*c+3]=mul(a0,11)^mul(a1,13)^mul(a2,9)^mul(a3,14);
+    }
+  }
+  function encBlk(b,w){var s=b.slice(),r;addRK(s,w,0);
+    for(r=1;r<10;r++){subB(s);shiftR(s);mixC(s);addRK(s,w,r)}
+    subB(s);shiftR(s);addRK(s,w,10);return s}
+  function decBlk(b,w){var s=b.slice(),r;addRK(s,w,10);
+    for(r=9;r>0;r--){invShiftR(s);invSubB(s);addRK(s,w,r);invMixC(s)}
+    invShiftR(s);invSubB(s);addRK(s,w,0);return s}
+  function u8(str){
+    if(typeof TextEncoder!=="undefined"){try{return Array.prototype.slice.call(new TextEncoder().encode(str))}catch(e){}}
+    var out=[],i,c;
+    for(i=0;i<str.length;i++){c=str.charCodeAt(i);
+      if(c<128)out.push(c);
+      else if(c<2048)out.push(192|(c>>6),128|(c&63));
+      else out.push(224|(c>>12),128|((c>>6)&63),128|(c&63));}
+    return out;
+  }
+  function u8s(b){
+    if(typeof TextDecoder!=="undefined"){try{return new TextDecoder().decode(new Uint8Array(b))}catch(e){}}
+    var s="",i=0,c,c2,c3;
+    while(i<b.length){c=b[i++];
+      if(c<128)s+=String.fromCharCode(c);
+      else if(c<224){c2=b[i++];s+=String.fromCharCode(((c&31)<<6)|(c2&63));}
+      else{c2=b[i++];c3=b[i++];s+=String.fromCharCode(((c&15)<<12)|((c2&63)<<6)|(c3&63));}}
+    return s;
+  }
+  function k16(k){return u8(k).slice(0,16)}
+  return {
+    enc:function(plain,key){
+      var w=expand(k16(key)),b=u8(plain),n=16-(b.length%16),i,out=[];
+      for(i=0;i<n;i++)b.push(n);
+      for(i=0;i<b.length;i+=16)out=out.concat(encBlk(b.slice(i,i+16),w));
+      var s="";for(i=0;i<out.length;i++)s+=String.fromCharCode(out[i]);
+      return btoa(s);
+    },
+    dec:function(b64,key){
+      var w=expand(k16(key)),s=atob(b64),b=[],i,out=[];
+      for(i=0;i<s.length;i++)b.push(s.charCodeAt(i));
+      for(i=0;i<b.length;i+=16)out=out.concat(decBlk(b.slice(i,i+16),w));
+      var n=out[out.length-1];
+      if(n>=1&&n<=16){var ok=1;for(i=0;i<n;i++)if(out[out.length-1-i]!==n)ok=0;if(ok)out=out.slice(0,out.length-n)}
+      return u8s(out);
+    }
+  };
+})();
+
+/* ================= 联网搜食物：NutriData =================
+   协议（2026-09 逆向自官方前端）：
+   1) 客户端生成 16 位 AES 密钥，用内置 RSA 公钥加密后放 nutridata-random 头
+   2) 请求体 / 响应体均 AES-128-ECB(PKCS7) + Base64
+   3) 登录 POST /nutri-oauth/user/login?param=<密文>  (x-www-form-urlencoded, body 空)
+   4) dblist/* 用 token 头；ingredient/* 用 nutridata-token 头
+   5) 食材检索 POST /nutri-service/ingredient/selectIngredientList
+      body {id:1(食物成分库), page, pageSize, name:关键词}
+      返回 result.list[]，每项含 name/edible 与 nutrientList[{name,desc,unit,value}]
+      营养素 key：Calorie / Protein / Fat / Carbohydrate，数值为每 100g 可食部 */
 var NDK="tcy-nd";
-var ND_API_DEF="dblist/synthesizeSearch";
-var ND_APIS=["dblist/synthesizeSearch","ingredient/selectIngredientList","dblist/selectDblist"];
-function ndLoad(){try{var o=JSON.parse(localStorage.getItem(NDK)||"null");return o&&o.cookie?o:{}}catch(e){return{}}}
-function ndSave(c,api){
-  var o=ndLoad();
-  if(c!==undefined&&c!==null)o.cookie=c||"";
-  if(api)o.api=(ND_APIS.indexOf(api)>-1)?api:ND_API_DEF;
-  localStorage.setItem(NDK,JSON.stringify(o));
-}
-function ndApi(){var o=ndLoad();return o.api||ND_API_DEF}
+var ND_KEY="tcy2026nutridata";
+var ND_RANDOM="tQcsxZjYlubS8T6fmCCYUkXePTlS58FMee/O2pJSmSbIapyoMrQkcpdVrYV5QeeR5/TPw007UxUDWP9195O4fA0A+GmSVr244316d8rXJ8HGtqUOuGYEtYP6O6sg+EaDdhVnSTCn+Hl9sGZMQ5JRAvwQ8J9Fs43wCiV3ZKp3Hy8=";
+var ND_BASE="https://nutridata.cn/api/";
+var ND_DBID=1; /* 1=食物成分库(3446)  2=菜肴库(22180) */
+
+function ndLoad(){try{var o=JSON.parse(localStorage.getItem(NDK)||"null");return o&&typeof o==="object"?o:{}}catch(e){return{}}}
+function ndPut(k,v){var c=ndLoad();c[k]=v;localStorage.setItem(NDK,JSON.stringify(c))}
 function ndClear(){localStorage.removeItem(NDK)}
+function ndAcc(){var c=ndLoad();return{u:c.u?wdDec(c.u):"",p:c.p?wdDec(c.p):""}}
+function ndHas(){var a=ndAcc();return !!(a.u&&a.p)}
+function ndTok(){var c=ndLoad();return c.tk?wdDec(c.tk):""}
+function ndAlive(){
+  var c=ndLoad();
+  if(!c.tk)return 0;
+  var e=parseFloat(c.exp)||0;
+  return e?e>Date.now()+60000:1; /* 无过期时间则按有效处理，靠 60011 兜底 */
+}
 function ndRender(force){
-  var c=ndLoad(),v=document.getElementById("ndView"),f=document.getElementById("ndForm"),
+  var v=document.getElementById("ndView"),f=document.getElementById("ndForm"),
       who=document.getElementById("ndWho"),st=document.getElementById("ndStatus"),
-      av=document.getElementById("ndApiView"),sel=document.getElementById("ndApi");
+      iv=document.getElementById("ndUser"),ip=document.getElementById("ndPass");
   if(!v||!f)return;
-  if(c.cookie&&!force){
+  if(ndHas()&&!force){
     v.classList.remove("hidden");f.classList.add("hidden");
-    who.textContent="已配置（"+(c.cookie||"").length+" 字节）";
-    if(av)av.textContent=ndApi();
+    var a=ndAcc();
+    who.textContent=a.u+"（"+(ndTok()?"已登录":"未登录")+"）";
     if(st)st.textContent="";
   }else{
     v.classList.add("hidden");f.classList.remove("hidden");
-    var cv=document.getElementById("ndCookie");
-    if(cv)cv.value=(force&&c.cookie)?c.cookie:"";
-    if(sel)sel.value=ndApi();
+    var a2=ndAcc();
+    if(iv)iv.value=a2.u;if(ip)ip.value=force?a2.p:"";
     if(st)st.textContent="";
   }
 }
-async function ndCall(payload){
-  var c=ndLoad();
-  if(!c.cookie)throw new Error("尚未配置 Cookie");
-  var r=await fetch("https://nutridata.cn/api/nutri-service/"+ndApi(),{
-    method:"POST",
-    mode:"cors",
-    credentials:"omit",
-    headers:{"Content-Type":"application/json","Cookie":c.cookie,"Accept":"application/json"},
-    body:JSON.stringify(payload||{})
-  });
-  var j=null;try{j=await r.json()}catch(e){}
-  if(j&&j.code===6001)throw new Error("Cookie 无效或已过期，请重新获取");
-  if(j&&j.code===5002)throw new Error("接口拒绝参数（5002）");
-  if(!r.ok&&!j)throw new Error("HTTP "+r.status);
-  if(r.status>=500)throw new Error("服务端错误 HTTP "+r.status+(j&&j.requestId?(" ("+j.requestId+")"):"")+"：多半是 Cookie 无效");
-  return j||{code:r.status};
+function ndFetch(path,opt){
+  opt=opt||{};
+  var h={"Content-Type":opt.form?"application/x-www-form-urlencoded":"application/json","nutridata-random":ND_RANDOM};
+  if(opt.token){h["token"]=opt.token;h["nutridata-token"]=opt.token}
+  var url=ND_BASE+path+(opt.query?("?param="+encodeURIComponent(NDAes.enc(opt.query,ND_KEY))):"");
+  var ctl=typeof AbortController!=="undefined"?new AbortController():null;
+  var timer=ctl?setTimeout(function(){ctl.abort()},15000):null;
+  return fetch(url,{method:"POST",mode:"cors",credentials:"omit",headers:h,
+      body:opt.form?"":NDAes.enc(JSON.stringify(opt.data||{}),ND_KEY),signal:ctl?ctl.signal:undefined})
+    .then(function(r){return r.text()})
+    .then(function(t){
+      var j=null;
+      try{j=JSON.parse(NDAes.dec(t,ND_KEY))}catch(e){try{j=JSON.parse(t)}catch(e2){}}
+      if(!j)throw new Error("响应解析失败");
+      return j;
+    })
+    .then(function(j){if(timer)clearTimeout(timer);return j},
+          function(e){if(timer)clearTimeout(timer);throw e});
 }
-async function ndTest(){
-  var j=await ndCall({keyword:"苹果",pageNum:1,pageSize:5});
+async function ndLogin(force){
+  if(!force&&ndAlive()&&ndTok())return ndTok();
+  var a=ndAcc();
+  if(!a.u||!a.p)throw new Error("未配置 NutriData 账号");
+  var j=await ndFetch("nutri-oauth/user/login",{form:1,
+    query:"username="+encodeURIComponent(a.u)+"&password="+encodeURIComponent(a.p)});
+  if(!j||j.code!==200||!j.result||!j.result.token)throw new Error((j&&j.msg)||"登录失败");
+  ndPut("tk",wdEnc(j.result.token));
+  ndPut("exp",j.result.time?String(new Date(String(j.result.time).replace(/-/g,"/")).getTime()):"");
+  return j.result.token;
+}
+async function ndApi(path,data,retry){
+  var tk=await ndLogin(0);
+  var j=await ndFetch("nutri-service/"+path,{data:data,token:tk});
+  if(j&&(j.code===60011||j.code===6001)&&!retry){
+    var tk2=await ndLogin(1);
+    return await ndFetch("nutri-service/"+path,{data:data,token:tk2});
+  }
   return j;
 }
-/* 把接口原始返回压缩成一段可读文本，便于定位字段名 */
-function ndDump(j){
-  if(!j)return "(空)";
-  var s=JSON.stringify(j);
-  if(s.length>420)s=s.slice(0,420)+"…";
-  return s;
+async function ndTest(){
+  var j=await ndApi("ingredient/selectIngredientList",{id:ND_DBID,page:1,pageSize:3,name:"苹果"},0);
+  if(!j||j.code!==200)throw new Error((j&&j.msg)||("接口返回 "+(j&&j.code)));
+  var n=(j.result&&j.result.list)?j.result.list.length:0;
+  return "连接成功：食物成分库可访问，测试返回 "+n+" 条";
+}
+function ndNut(item,key){
+  var L=(item&&item.nutrientList)||[],i;
+  for(i=0;i<L.length;i++)if(L[i].name===key)return L[i].value;
+  return null;
 }
 async function searchNutriData(q,cb){
   if(typeof fetch!=="function"){cb(null,"当前环境不支持联网");return}
-  if(!ndLoad().cookie){cb(null,"未配置 NutriData 凭据，请先在【我的】→ 联网搜食物 中设置");return}
-  var done=0,t=setTimeout(function(){if(!done){done=1;cb(null,"请求超时（12s）")}},12000);
+  if(!ndHas()){cb(null,"未配置 NutriData 账号，请到【我的】→ 联网搜食物 中设置");return}
+  var done=0,t=setTimeout(function(){if(!done){done=1;cb(null,"请求超时（15s）")}},16000);
   try{
-    var j=await ndCall({keyword:q||"",pageNum:1,pageSize:12});
+    var j=await ndApi("ingredient/selectIngredientList",
+      {id:ND_DBID,page:1,pageSize:12,name:q||""},0);
     if(done)return;done=1;clearTimeout(t);
-    if(j.code&&j.code!==200){cb(null,j.msg||("接口返回 "+j.code));return}
-    var arr=(j.data&&(j.data.records||j.data.list||j.data.rows||j.data))||[];
+    if(!j||j.code!==200){cb(null,(j&&j.msg)||("接口返回 "+(j&&j.code)));return}
+    var arr=(j.result&&j.result.list)||[];
     if(!Array.isArray(arr))arr=[];
     var out=[];
     arr.forEach(function(x){
-      var n=x.foodName||x.name||x.chineseName||x.title||x.food_name;
+      var n=x.name||x.foodName;
       if(!n)return;
-      /* 字段映射：尝试多种命名；按 100g 可食部 */
-      function v(k){return x[k]!==undefined?x[k]:(x[k.toLowerCase()]!==undefined?x[k.toLowerCase()]:null)}
-      var C=v("carbohydrateG")||v("carbohydrate")||v("carbG")||v("carb")||v("carbohydrate_100g");
-      var P=v("proteinG")||v("protein")||v("proteins")||v("protein_100g");
-      var F=v("fatG")||v("fat")||v("fat_100g");
-      var K=v("energyKcal")||v("energy")||v("calories")||v("kcal");
-      var pN=parseFloat(P)||0,fN=parseFloat(F)||0,cN=parseFloat(C)||0;
-      out.push({n:n,b:x.brand||x.dbName||"",c:cN,p:pN,f:fN,k:K,id:x.id});
+      out.push({n:n,b:"",
+        c:parseFloat(ndNut(x,"Carbohydrate"))||0,
+        p:parseFloat(ndNut(x,"Protein"))||0,
+        f:parseFloat(ndNut(x,"Fat"))||0,
+        k:parseFloat(ndNut(x,"Calorie"))||0,
+        id:x.id});
     });
+    if(!out.length){cb([],"没搜到「"+q+"」，换个关键词或手动录入");return}
     cb(out,null);
   }catch(e){
     if(done)return;done=1;clearTimeout(t);
@@ -1998,37 +2124,35 @@ function go(tab){
   document.getElementById("btnSyncSave").onclick=syncSaveCfg;
   document.getElementById("btnSyncClear").onclick=syncClear;
 
-  /* NutriData 凭据 */
+  /* NutriData 账号 */
+  function ndStatus(){return document.getElementById("ndStatus")}
+  function ndMsg(t,ok){var s=ndStatus();if(!s)return;s.textContent=t;s.style.color=ok?"var(--ok)":"var(--warn)"}
   document.getElementById("btnNdEdit").onclick=function(){ndRender(1)};
   document.getElementById("btnNdCancel").onclick=function(){ndRender()};
   document.getElementById("btnNdClear").onclick=function(){
-    if(!confirm("清除 NutriData 凭据？"))return;
+    if(!confirm("清除 NutriData 账号与登录状态？"))return;
     ndClear();ndRender();
   };
   document.getElementById("btnNdSave").onclick=function(){
-    var cv=document.getElementById("ndCookie"),st=document.getElementById("ndStatus"),
-        sel=document.getElementById("ndApi");
-    var v=(cv.value||"").trim();
-    if(!v){st.textContent="请粘贴 Cookie";st.style.color="var(--warn)";return}
-    ndSave(v,sel?sel.value:null);
-    st.textContent="已保存（接口 "+ndApi()+"）";st.style.color="var(--ok)";ndRender();
+    var u=(document.getElementById("ndUser").value||"").trim(),
+        p=(document.getElementById("ndPass").value||"").trim();
+    if(!u||!p){ndMsg("请填写手机号和密码",0);return}
+    ndPut("u",wdEnc(u));ndPut("p",wdEnc(p));ndPut("tk","");ndPut("exp","");
+    ndMsg("已保存，点「测试连接」验证一下",1);ndRender();
   };
-  document.getElementById("btnNdTest").onclick=async function(){
-    var cv=document.getElementById("ndCookie"),st=document.getElementById("ndStatus"),
-        sel=document.getElementById("ndApi");
-    var v=(cv.value||"").trim();
-    if(!v){st.textContent="请先粘贴 Cookie 再测试";st.style.color="var(--warn)";return}
-    st.textContent="测试中…（"+((sel&&sel.value)||ndApi())+"）";st.style.color="var(--muted)";
-    st.style.wordBreak="break-all";st.style.whiteSpace="normal";
+  var ndTestFn=async function(){
+    var u=(document.getElementById("ndUser")&&document.getElementById("ndUser").value||"").trim(),
+        p=(document.getElementById("ndPass")&&document.getElementById("ndPass").value||"").trim();
+    if(u&&p){ndPut("u",wdEnc(u));ndPut("p",wdEnc(p));ndPut("tk","");ndPut("exp","")}
+    if(!ndHas()){ndMsg("请先填写手机号和密码",0);ndRender();return}
+    ndMsg("登录并检索中…",0);
     try{
-      ndSave(v,sel?sel.value:null);
-      var j=await ndTest();
-      st.textContent="连接成功 code="+(j.code||200)+"｜原始返回："+ndDump(j);
-      st.style.color="var(--ok)";
-    }catch(e){
-      st.textContent="失败："+(e.message||e);st.style.color="var(--warn)";
-    }
+      var r=await ndTest();
+      ndMsg(r,1);ndRender();
+    }catch(e){ndMsg("失败："+(e.message||e),0)}
   };
+  document.getElementById("btnNdTest").onclick=ndTestFn;
+  document.getElementById("btnNdTest2").onclick=ndTestFn;
   ndRender();
 
   document.querySelectorAll("#segPeriod button").forEach(function(b){
