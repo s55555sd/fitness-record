@@ -458,6 +458,7 @@ table.kv td:last-child{text-align:right;font-variant-numeric:tabular-nums}
     <div id="ndView" class="hidden">
       <table class="kv">
         <tr><td>状态</td><td id="ndWho">—</td></tr>
+        <tr><td>接口</td><td id="ndApiView">—</td></tr>
       </table>
       <div class="foot" style="margin-top:10px">
         <button id="btnNdEdit">修改凭据</button>
@@ -470,6 +471,12 @@ table.kv td:last-child{text-align:right;font-variant-numeric:tabular-nums}
         在浏览器登录 <a href="https://nutridata.cn/" target="_blank">nutridata.cn</a>（邮箱/微信/SMS），按 <b>F12</b> → Network 标签 → 刷新页面 → 点任意 <code>/api/</code> 请求 → 在 Request Headers 中找 <b>Cookie</b> 行 → 复制整段值粘贴到下方。<br>
         凭据只保存在本机 localStorage（base64 弱保护），不上传。注意会话 Cookie 会过期，失效后重新登录复制即可。
       </div>
+      <div class="row"><label>接口</label>
+        <select id="ndApi">
+          <option value="dblist/synthesizeSearch">dblist/synthesizeSearch（官方前端在用，推荐）</option>
+          <option value="ingredient/selectIngredientList">ingredient/selectIngredientList（备选）</option>
+          <option value="dblist/selectDblist">dblist/selectDblist（分库检索）</option>
+        </select></div>
       <div class="row"><label>Cookie</label>
         <textarea id="ndCookie" rows="3" placeholder="粘贴浏览器中复制的完整 Cookie 值"></textarea></div>
       <div class="err" id="ndStatus"></div>
@@ -1151,27 +1158,39 @@ function matchFood(f,q){
 /* nutridata.cn 的食物数据库（3446 条食物+22180 道菜谱）需登录后才能访问；
    CORS 头允许携带凭证，请求时附上 Cookie 即可。 */
 var NDK="tcy-nd";
+var ND_API_DEF="dblist/synthesizeSearch";
+var ND_APIS=["dblist/synthesizeSearch","ingredient/selectIngredientList","dblist/selectDblist"];
 function ndLoad(){try{var o=JSON.parse(localStorage.getItem(NDK)||"null");return o&&o.cookie?o:{}}catch(e){return{}}}
-function ndSave(c){localStorage.setItem(NDK,JSON.stringify({cookie:c||""}))}
+function ndSave(c,api){
+  var o=ndLoad();
+  if(c!==undefined&&c!==null)o.cookie=c||"";
+  if(api)o.api=(ND_APIS.indexOf(api)>-1)?api:ND_API_DEF;
+  localStorage.setItem(NDK,JSON.stringify(o));
+}
+function ndApi(){var o=ndLoad();return o.api||ND_API_DEF}
 function ndClear(){localStorage.removeItem(NDK)}
-function ndRender(){
+function ndRender(force){
   var c=ndLoad(),v=document.getElementById("ndView"),f=document.getElementById("ndForm"),
-      who=document.getElementById("ndWho"),st=document.getElementById("ndStatus");
+      who=document.getElementById("ndWho"),st=document.getElementById("ndStatus"),
+      av=document.getElementById("ndApiView"),sel=document.getElementById("ndApi");
   if(!v||!f)return;
-  if(c.cookie){
+  if(c.cookie&&!force){
     v.classList.remove("hidden");f.classList.add("hidden");
     who.textContent="已配置（"+(c.cookie||"").length+" 字节）";
+    if(av)av.textContent=ndApi();
     if(st)st.textContent="";
   }else{
     v.classList.add("hidden");f.classList.remove("hidden");
-    var cv=document.getElementById("ndCookie");if(cv)cv.value="";
+    var cv=document.getElementById("ndCookie");
+    if(cv)cv.value=(force&&c.cookie)?c.cookie:"";
+    if(sel)sel.value=ndApi();
     if(st)st.textContent="";
   }
 }
 async function ndCall(payload){
   var c=ndLoad();
   if(!c.cookie)throw new Error("尚未配置 Cookie");
-  var r=await fetch("https://nutridata.cn/api/nutri-service/dblist/synthesizeSearch",{
+  var r=await fetch("https://nutridata.cn/api/nutri-service/"+ndApi(),{
     method:"POST",
     mode:"cors",
     credentials:"omit",
@@ -1180,12 +1199,21 @@ async function ndCall(payload){
   });
   var j=null;try{j=await r.json()}catch(e){}
   if(j&&j.code===6001)throw new Error("Cookie 无效或已过期，请重新获取");
+  if(j&&j.code===5002)throw new Error("接口拒绝参数（5002）");
   if(!r.ok&&!j)throw new Error("HTTP "+r.status);
+  if(r.status>=500)throw new Error("服务端错误 HTTP "+r.status+(j&&j.requestId?(" ("+j.requestId+")"):"")+"：多半是 Cookie 无效");
   return j||{code:r.status};
 }
 async function ndTest(){
   var j=await ndCall({keyword:"苹果",pageNum:1,pageSize:5});
   return j;
+}
+/* 把接口原始返回压缩成一段可读文本，便于定位字段名 */
+function ndDump(j){
+  if(!j)return "(空)";
+  var s=JSON.stringify(j);
+  if(s.length>420)s=s.slice(0,420)+"…";
+  return s;
 }
 async function searchNutriData(q,cb){
   if(typeof fetch!=="function"){cb(null,"当前环境不支持联网");return}
@@ -1971,27 +1999,32 @@ function go(tab){
   document.getElementById("btnSyncClear").onclick=syncClear;
 
   /* NutriData 凭据 */
-  document.getElementById("btnNdEdit").onclick=function(){ndRender()};
+  document.getElementById("btnNdEdit").onclick=function(){ndRender(1)};
   document.getElementById("btnNdCancel").onclick=function(){ndRender()};
   document.getElementById("btnNdClear").onclick=function(){
     if(!confirm("清除 NutriData 凭据？"))return;
     ndClear();ndRender();
   };
   document.getElementById("btnNdSave").onclick=function(){
-    var cv=document.getElementById("ndCookie"),st=document.getElementById("ndStatus");
+    var cv=document.getElementById("ndCookie"),st=document.getElementById("ndStatus"),
+        sel=document.getElementById("ndApi");
     var v=(cv.value||"").trim();
     if(!v){st.textContent="请粘贴 Cookie";st.style.color="var(--warn)";return}
-    ndSave(v);st.textContent="已保存";st.style.color="var(--ok)";ndRender();
+    ndSave(v,sel?sel.value:null);
+    st.textContent="已保存（接口 "+ndApi()+"）";st.style.color="var(--ok)";ndRender();
   };
   document.getElementById("btnNdTest").onclick=async function(){
-    var cv=document.getElementById("ndCookie"),st=document.getElementById("ndStatus");
+    var cv=document.getElementById("ndCookie"),st=document.getElementById("ndStatus"),
+        sel=document.getElementById("ndApi");
     var v=(cv.value||"").trim();
     if(!v){st.textContent="请先粘贴 Cookie 再测试";st.style.color="var(--warn)";return}
-    st.textContent="测试中…";st.style.color="var(--muted)";
+    st.textContent="测试中…（"+((sel&&sel.value)||ndApi())+"）";st.style.color="var(--muted)";
+    st.style.wordBreak="break-all";st.style.whiteSpace="normal";
     try{
-      ndSave(v);
+      ndSave(v,sel?sel.value:null);
       var j=await ndTest();
-      st.textContent="连接成功（接口 code="+(j.code||200)+"）";st.style.color="var(--ok)";
+      st.textContent="连接成功 code="+(j.code||200)+"｜原始返回："+ndDump(j);
+      st.style.color="var(--ok)";
     }catch(e){
       st.textContent="失败："+(e.message||e);st.style.color="var(--warn)";
     }
