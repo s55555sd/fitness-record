@@ -1047,10 +1047,13 @@ function ndSearch(q,limit){
     if(n.indexOf(q)<0)continue;
     if(n.indexOf(q)===0)pre.push(f);else sub.push(f);
   }
-  /* 前缀命中优先，且名字短的（多为代表值/基础条目）排在前面 */
-  pre.sort(function(a,b){return a[0].length-b[0].length});
-  sub.sort(function(a,b){return a[0].length-b[0].length});
-  return pre.concat(sub).slice(0,limit||40);
+  /* 「代表值」条目（该品类的标准值）提到最前，其余保持库内原始顺序 */
+  function lift(a){
+    var y=[],n2=[],i;
+    for(i=0;i<a.length;i++)(a[i][0].indexOf("代表值")>-1?y:n2).push(a[i]);
+    return y.concat(n2);
+  }
+  return lift(pre).concat(lift(sub)).slice(0,limit||40);
 }
 
 var FOOD_ALIAS={
